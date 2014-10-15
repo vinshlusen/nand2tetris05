@@ -1,0 +1,104 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Central Processing unit (CPU).
+ * Consists of an ALU and a set of registers, designed to fetch and 
+ * execute instructions written in the Hack machine language.
+ * In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in outM, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM=0, any value may 
+ * appear in outM). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time unit. If reset=1 then the 
+ * CPU jumps to address 0 (i.e. sets pc=0 in next time unit) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset=1) or continue executing
+                         // the current program (reset=0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write into M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+	
+	// first, we decide whether this is a-instruction or c-instruction 
+	// if c-instruction then instSel = 1, if a-instruction then instSel = 0
+	
+	And(a = instruction[15], b = instruction[15], out = instSel)
+	
+	//second we set flags for the different destinations in case this is a c-instruction
+	
+	And(a = instruction[15], b = instruction[2], out = destA);
+	And(a = instruction[15], b = instruction[3], out = destM, out = writeM);
+    And(a = instruction[15], b = instruction[4], out = destD);
+
+	// third, we decide whether we load A with a new value, which might happen if:
+	// 1) The instruction is an a-instruction.
+	// 2) The instruction is a c-instruction and the computation destination includes A.
+	
+	Not(a = instruction[15], out = assignValToA)
+	Or(a = assignValToA, b = destA, out = loadA);
+	
+	// fourth, we decide whether this is a c-instruction with an M parameter or an A parameter
+	
+	And(a = instruction[15], b = instruction[12], out = paramA);
+	
+	// fifth, we decode the jumping condition
+	
+	DMux8Way(in = true, sel[0] = instruction[0], sel[1] = instruction[1], sel[2] = instruction[2], a = NULL, b = JGT, c = JEQ, d =JGE, e =JLT,f =JNE, g = JLE ,h = JMP);
+	
+	Not(in = zr, out = notZr);
+	Not(in = ng, out = notNg);
+	
+	And(a = notZr, b = notNg, out = GT);
+	And(a = JGT , b = GT ,out = JGTC);
+	And(a = JEQ, b = zr, out = JEQC);
+	And(a = JGE, b = notZr , out = JGEC);
+	And(a = notZr, b = ng, out = LT);
+	And3Way(a = JLT, b = LT, out = JLTC);
+	And(a = JNE, b = notZr, out = JNEC);
+	Or(a = zr, b = ng, out = LE);
+	And(a = JLE, b = LE, out = JLEC);
+	
+	Or8Way(in[0] = false, in[1] = JGTC, in[2] = JEQC, in[3] = JGEC, in[4] = JLTC, in[5] = JNEC, in[6] = JLEC, in[7] = JMP,out = makeJump);
+	
+	// Now after we have all the control flags set we describe the CPU logic (based on the design given in the book).
+	
+	// We decide with what we load A, if indeed *it will* be loaded, otherwise the load bit of A
+	// will not be set and nothing will be done with newValue.
+	Mux(a = outALU, b = instruction, sel = intSel, out = newAvalue);
+	ARegister(in = newAvalue, load = loadA, out = outA, out = addressM);
+	
+	// we get the correct register paramater, A or M
+	Mux(a = inM, b = outA, sel = paramA, out = regParam);
+	
+	// We activate the ALU
+	ALU(x = outD, y = regParam, zx = instruction[11] , nx = instruction[10], zy =instruction[9], ny = instruction[8], f =instruction[7] ,no = instruction[6], out = outALU, out = outM, zr = zr, ng = ng);
+	
+	// we load D register with ALU's output if necessary
+	DRegister(in = outALU, load = destD, out = outD);
+	
+	// we set the Program Counter with the its appropriate settings and send out the new instruction address
+	// if makeJump is not set then we ignore outA here (it has a different purpose in this CPU cycle).
+	PC(in = outA, load = makeJump, rest = reset, out = pc);
+	
+}
